@@ -687,7 +687,17 @@ def extract_production_table(lines: List[str]) -> List[Tuple[int, str, float]]:
 # Core file parser
 # ---------------------------------------------------------------------------
 
-Row = Dict  # {ticker, filing_date, report_year, section, label, value_thousands}
+Row = Dict  # {ticker, filing_date, report_year, section, label, value_thousands, source}
+
+# Source provenance tags and their confidence priority (higher = preferred in dedup).
+SOURCE_PRIORITY: Dict[str, int] = {
+    "table_text": 2,
+    "prose_regex": 1,
+}
+
+
+def _priority(row: "Row") -> int:
+    return SOURCE_PRIORITY.get(row.get("source", "prose_regex"), 0)
 
 
 def parse_file(path: Path) -> List[Row]:
@@ -707,7 +717,7 @@ def parse_file(path: Path) -> List[Row]:
     rows: List[Row] = []
     captured: set = set()  # (section, label, report_year) — prevents dup rows
 
-    def add(section: str, label: str, nums: List[float]) -> None:
+    def add(section: str, label: str, nums: List[float], source: str = "table_text") -> None:
         """Align extracted numbers to detected year columns."""
         n_years = len(years)
         if not nums:
@@ -728,6 +738,7 @@ def parse_file(path: Path) -> List[Row]:
                 "section": section,
                 "label": label,
                 "value_thousands": round(val * scale, 3),
+                "source": source,
             })
 
     in_changes = False
@@ -788,6 +799,7 @@ def parse_file(path: Path) -> List[Row]:
                     "section": "prices",
                     "label": price_label,
                     "value_thousands": val,
+                    "source": "table_text",
                 })
     else:
         # Fall back to prose extraction (single price per filing date — most recent year)
@@ -800,6 +812,7 @@ def parse_file(path: Path) -> List[Row]:
                 "section": "prices",
                 "label": price_label,
                 "value_thousands": val,
+                "source": "prose_regex",
             })
 
     # --- Distribution totals from quarterly schedule tables ---
@@ -812,6 +825,7 @@ def parse_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "royalty_income_total",
             "value_thousands": royalty_income_k,
+            "source": "table_text",
         })
         rows.append({
             "ticker": ticker,
@@ -820,6 +834,7 @@ def parse_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "distributable_income_total",
             "value_thousands": distributable_income_k,
+            "source": "table_text",
         })
         rows.append({
             "ticker": ticker,
@@ -828,6 +843,7 @@ def parse_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "distribution_per_unit_total",
             "value_thousands": distribution_per_unit,
+            "source": "table_text",
         })
 
     # --- Reserve prose headline fields ---
@@ -840,6 +856,7 @@ def parse_file(path: Path) -> List[Row]:
             "section": "reserves",
             "label": label,
             "value_thousands": val,
+            "source": "prose_regex",
         })
 
     return rows
@@ -861,10 +878,12 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
     except Exception:
         filing_year = None
 
-    # Distribution totals
+    # Distribution totals — table extractor wins over prose fallback.
     dist_rows = extract_distribution_totals(lines)
+    dist_source = "table_text"
     if not dist_rows:
         dist_rows = extract_distribution_totals_text(text)
+        dist_source = "prose_regex"
     for yr, royalty_income_k, distributable_income_k, distribution_per_unit in dist_rows:
         rows.append({
             "ticker": ticker,
@@ -873,6 +892,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "royalty_income_total",
             "value_thousands": royalty_income_k,
+            "source": dist_source,
         })
         rows.append({
             "ticker": ticker,
@@ -881,6 +901,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "distributable_income_total",
             "value_thousands": distributable_income_k,
+            "source": dist_source,
         })
         rows.append({
             "ticker": ticker,
@@ -889,6 +910,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": "distribution_per_unit_total",
             "value_thousands": distribution_per_unit,
+            "source": dist_source,
         })
 
     # Reserve table/prose fields — prefer filing_year; fall back to detected years.
@@ -901,6 +923,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "reserves",
             "label": label,
             "value_thousands": val,
+            "source": "table_text",
         })
     for yr, label, val in extract_reserve_prose(text, default_year):
         rows.append({
@@ -910,6 +933,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "reserves",
             "label": label,
             "value_thousands": val,
+            "source": "prose_regex",
         })
 
     # Production table/prose fields
@@ -921,6 +945,7 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": label,
             "value_thousands": val,
+            "source": "table_text",
         })
     for yr, label, val in extract_production_prose(text):
         rows.append({
@@ -930,13 +955,14 @@ def parse_model_inputs_file(path: Path) -> List[Row]:
             "section": "operations",
             "label": label,
             "value_thousands": val,
+            "source": "prose_regex",
         })
 
-    # De-duplicate rows by exact key while keeping first seen value.
+    # De-duplicate rows: higher-priority source wins; within same priority, first-seen wins.
     deduped: Dict[Tuple[str, int, str], Row] = {}
     for r in rows:
         k = (r["section"], int(r["report_year"]), r["label"])
-        if k not in deduped:
+        if k not in deduped or _priority(r) > _priority(deduped[k]):
             deduped[k] = r
     return list(deduped.values())
 
@@ -1043,6 +1069,35 @@ def run_qa_checks(all_rows: List[Row]) -> List[str]:
                 f"{ticker}/{filing_date}/{year}: suspiciously small future_income_tax ({fit}) - verify row mapping"
             )
 
+        # Reserve/production sanity checks (only for filings where we expect these fields).
+        reserves = {r["label"]: r for r in rows if r["section"] == "reserves"}
+        ops = {r["label"]: r["value_thousands"] for r in rows if r["section"] == "operations"}
+
+        oil_mmbbl = reserves.get("proved_oil_mmbbl")
+        gas_bcf = reserves.get("proved_gas_bcf")
+        if oil_mmbbl is not None:
+            v = oil_mmbbl["value_thousands"]
+            if not (0.001 <= v <= 10_000):
+                warnings.append(f"{ticker}/{filing_date}/{year}: proved_oil_mmbbl out of range ({v})")
+        if gas_bcf is not None:
+            v = gas_bcf["value_thousands"]
+            if not (0.001 <= v <= 100_000):
+                warnings.append(f"{ticker}/{filing_date}/{year}: proved_gas_bcf out of range ({v})")
+
+        # Warn if both oil and gas reserve rows exist but came from different sources.
+        if oil_mmbbl and gas_bcf and oil_mmbbl.get("source") != gas_bcf.get("source"):
+            warnings.append(
+                f"{ticker}/{filing_date}/{year}: proved_oil_mmbbl source={oil_mmbbl.get('source')} "
+                f"but proved_gas_bcf source={gas_bcf.get('source')} — verify consistency"
+            )
+
+        ann_oil = ops.get("annual_oil_production_barrels")
+        ann_gas = ops.get("annual_gas_production_mcf")
+        if ann_oil is not None and ann_oil <= 0:
+            warnings.append(f"{ticker}/{filing_date}/{year}: non-positive annual_oil_production_barrels ({ann_oil})")
+        if ann_gas is not None and ann_gas <= 0:
+            warnings.append(f"{ticker}/{filing_date}/{year}: non-positive annual_gas_production_mcf ({ann_gas})")
+
     return warnings
 
 
@@ -1090,17 +1145,17 @@ def main() -> None:
             print(f"  Parsing {ticker}/{filing} model-inputs ...  {len(rows)} data points")
             all_rows.extend(rows)
 
-    # Deduplicate exact rows from overlapping sources.
+    # Deduplicate across all sources: higher-priority source wins; within same priority, first-seen wins.
     deduped: Dict[Tuple[str, str, int, str, str], Row] = {}
     for r in all_rows:
         key = (r["ticker"], r["filing_date"], int(r["report_year"]), r["section"], r["label"])
-        if key not in deduped:
+        if key not in deduped or _priority(r) > _priority(deduped[key]):
             deduped[key] = r
     all_rows = list(deduped.values())
 
     # Write long CSV
     long_path = out_root / LONG_CSV
-    fieldnames = ["ticker", "filing_date", "report_year", "section", "label", "value_thousands"]
+    fieldnames = ["ticker", "filing_date", "report_year", "section", "label", "value_thousands", "source"]
     with open(long_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
