@@ -145,7 +145,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/history") {
-      const raw = await env.PRICES.get(HISTORY_KEY);
+      const raw = await env.OIL_KV_BINDING.get(HISTORY_KEY);
       if (!raw) return Response.json({ error: "No history yet" }, { status: 404 });
       return Response.json(JSON.parse(raw), {
         headers: { "Cache-Control": "public, max-age=3600" },
@@ -153,7 +153,7 @@ export default {
     }
 
     // Default: serve latest snapshot
-    const raw = await env.PRICES.get(LATEST_KEY);
+    const raw = await env.OIL_KV_BINDING.get(LATEST_KEY);
     if (!raw) {
       return Response.json(
         { error: "No data yet — cron hasn't run, or manually POST /refresh" },
@@ -170,7 +170,7 @@ export default {
     console.log("Cron fired:", event.cron, "at", new Date().toISOString());
     try {
       const snapshot = await fetchPrices(env.EIA_API_KEY);
-      await storeSnapshot(env.PRICES, snapshot);
+      await storeSnapshot(env.OIL_KV_BINDING, snapshot);
       console.log("Stored snapshot:", JSON.stringify(snapshot));
     } catch (err) {
       console.error("Failed to fetch prices:", err);
