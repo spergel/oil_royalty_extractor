@@ -6,6 +6,8 @@ Reads output/<TICKER>/<date>_standardized_measure.txt and extracts:
   - Main table: future cash flows, PV10 discount, standardized measure
   - Changes table: beginning/ending SM, accretion, sales, revisions, etc.
   - Commodity prices (SEC reference prices from intro text or price table)
+  - Operations totals (royalty income, distributable income, distribution/unit)
+  - Reserve headline prose fields when present (proved oil/gas, net/discounted value)
 
 Output:
   output/standardized_measure_data.csv  — long format (one row per ticker/date/year/label)
@@ -60,6 +62,41 @@ GAS_PRICE_RE = re.compile(
 )
 NGL_PRICE_RE = re.compile(
     r"\$([\d]+\.[\d]+)\s+per\s+bbl\s+of\s+ngl", re.IGNORECASE
+)
+
+# Reserve/distribution extraction
+RESERVE_PROSE_RE = re.compile(
+    r"approximately\s+([\d]+(?:\.\d+)?)\s+million\s+barrels?\s+of\s+oil"
+    r".{0,120}?"
+    r"([\d]+(?:\.\d+)?)\s+billion\s+cubic\s+feet\s+of\s+gas"
+    r".{0,200}?"
+    r"future\s+net\s+value.{0,80}?\$([\d,]+(?:\.\d+)?)"
+    r".{0,120}?"
+    r"discounted\s+value.{0,80}?\$([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+RESERVE_SIMPLE_RE = re.compile(
+    r"approximately\s+([\d]+(?:\.\d+)?)\s+million\s+barrels?\s+of\s+oil"
+    r".{0,140}?"
+    r"([\d]+(?:\.\d+)?)\s+billion\s+cubic\s+feet\s+of\s+gas",
+    re.IGNORECASE | re.DOTALL,
+)
+
+DIST_YEAR_HEADER_RE = re.compile(
+    r"^\s*(20\d{2})\s+royalty\s+income.*distributable\s+income.*distribution\s+per\s+unit",
+    re.IGNORECASE,
+)
+
+PRODUCTION_PROSE_RE = re.compile(
+    r"(?:for|during)\s+(?:the\s+year\s+ended\s+)?(?:december\s+31,\s*)?(20\d{2})"
+    r".{0,180}?"
+    r"(?:production|produced)"
+    r".{0,120}?"
+    r"([\d]+(?:\.\d+)?)\s+million\s+barrels?\s+of\s+oil"
+    r".{0,120}?"
+    r"([\d]+(?:\.\d+)?)\s+billion\s+cubic\s+feet\s+of\s+gas",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -381,6 +418,271 @@ def extract_prices_from_table_rows(lines: List[str]) -> Dict[str, float]:
     return prices
 
 
+def extract_distribution_totals(lines: List[str]) -> List[Tuple[int, float, float, float]]:
+    """
+    Extract annual totals from quarterly distributable-income tables.
+    Returns tuples:
+      (report_year, royalty_income_thousands, distributable_income_thousands, distribution_per_unit)
+    """
+    out: List[Tuple[int, float, float, float]] = []
+    current_year: Optional[int] = None
+    for line in lines:
+        c = clean(line)
+        n = norm(line)
+        m = DIST_YEAR_HEADER_RE.match(n)
+        if m:
+            current_year = int(m.group(1))
+            continue
+
+        if current_year is None:
+            continue
+
+        if n.startswith("total"):
+            # Prefer explicit 3-column parse (handles per-unit values like ".230042")
+            m_total = re.search(
+                r"total.*?\$?\s*([0-9,]+(?:\.\d+)?)\s+\$?\s*([0-9,]+(?:\.\d+)?)\s+\$?\s*([0-9]*\.\d+)",
+                c,
+                re.IGNORECASE,
+            )
+            if m_total:
+                royalty_income = parse_num(m_total.group(1))
+                distributable_income = parse_num(m_total.group(2))
+                distribution_per_unit = float(m_total.group(3))
+                if 0 <= distribution_per_unit <= 20:
+                    out.append((current_year, royalty_income, distributable_income, distribution_per_unit))
+                continue
+
+            # Fallback generic parse
+            nums = extract_numbers(c)
+            if len(nums) >= 3:
+                royalty_income = abs(nums[0])        # table says in thousands
+                distributable_income = abs(nums[1])  # table says in thousands
+                distribution_per_unit = abs(nums[2]) # dollars per unit
+                if 0 <= distribution_per_unit <= 20:
+                    out.append((current_year, royalty_income, distributable_income, distribution_per_unit))
+    return out
+
+
+def extract_distribution_totals_text(text: str) -> List[Tuple[int, float, float, float]]:
+    """
+    Regex fallback for quarterly distributable-income totals across messy whitespace.
+    """
+    out: List[Tuple[int, float, float, float]] = []
+    pat = re.compile(
+        r"(20\d{2})\s+royalty\s+income\s+distributable\s+income.*?"
+        r"total\s*\$?\s*([0-9,]+(?:\.\d+)?)\s*\$?\s*([0-9,]+(?:\.\d+)?)\s*\$?\s*([0-9]*\.\d+)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for m in pat.finditer(text):
+        yr = int(m.group(1))
+        royalty_income = parse_num(m.group(2))
+        distributable_income = parse_num(m.group(3))
+        distribution_per_unit = float(m.group(4))
+        if 0 <= distribution_per_unit <= 20:
+            out.append((yr, royalty_income, distributable_income, distribution_per_unit))
+    return out
+
+
+def extract_reserve_prose(text: str, default_year: Optional[int]) -> List[Tuple[int, str, float]]:
+    """
+    Extract reserve headline prose, when present.
+    Returns list of (report_year, label, value).
+    """
+    out: List[Tuple[int, str, float]] = []
+    if default_year is None:
+        return out
+    for m in RESERVE_PROSE_RE.finditer(text):
+        oil_mmbbl = float(m.group(1))
+        gas_bcf = float(m.group(2))
+        future_net_value_thousands = parse_num(m.group(3)) / 1000.0
+        discounted_value_thousands = parse_num(m.group(4)) / 1000.0
+        out.extend([
+            (default_year, "proved_oil_mmbbl", oil_mmbbl),
+            (default_year, "proved_gas_bcf", gas_bcf),
+            (default_year, "future_net_value_thousands", future_net_value_thousands),
+            (default_year, "discounted_value_thousands", discounted_value_thousands),
+        ])
+    # Fallback: just oil/gas proved quantities.
+    if not out:
+        for m in RESERVE_SIMPLE_RE.finditer(text):
+            out.extend([
+                (default_year, "proved_oil_mmbbl", float(m.group(1))),
+                (default_year, "proved_gas_bcf", float(m.group(2))),
+            ])
+    return out
+
+
+def extract_production_prose(text: str) -> List[Tuple[int, str, float]]:
+    """
+    Extract production headline prose when explicitly expressed as:
+    '... production ... X million barrels of oil ... Y billion cubic feet of gas'
+    Returns list of (report_year, label, value).
+    """
+    out: List[Tuple[int, str, float]] = []
+    for m in PRODUCTION_PROSE_RE.finditer(text):
+        yr = int(m.group(1))
+        oil_mmbbl = float(m.group(2))
+        gas_bcf = float(m.group(3))
+        out.append((yr, "annual_oil_production_mmbbl", oil_mmbbl))
+        out.append((yr, "annual_gas_production_bcf", gas_bcf))
+    return out
+
+
+def extract_reserve_table(text: str, default_year: Optional[int]) -> List[Tuple[int, str, float]]:
+    """
+    Parse reserve quantities from table-like rows in model_inputs text.
+    Returns (report_year, label, value) where oil/gas are normalized to MMbbl/BCF.
+
+    Handles two formats:
+    1. Inline header: "oil (mstb) gas (mcf)" on same line, then "total proved" row.
+    2. State-by-state (DeGolyer/SBR style): one-value-per-line layout where column
+       headers span multiple lines (Oil and Condensate (Mbbl) / NGL (Mbbl) / Total
+       Liquids (Mbbl) / Sales Gas (MMcf)) and state rows lead to a bare "Total" line.
+       We collect all lone numeric lines after "Total" until the next prose line to
+       get [oil_mbbl, ngl_mbbl, total_liquids_mbbl, gas_mmcf].
+    """
+    out: List[Tuple[int, str, float]] = []
+    if default_year is None:
+        return out
+
+    lines = text.splitlines()
+    candidates: List[Tuple[float, float]] = []
+    in_reserve_qty_table = False
+    in_pd_by_date_table = False
+
+    # --- state-by-state table detection ---
+    in_state_table = False
+    after_total = False
+    state_table_has_states = False
+    state_table_nums: List[float] = []
+    STATE_NAMES = {"florida", "louisiana", "mississippi", "new mexico", "oklahoma", "texas",
+                   "wyoming", "utah", "colorado", "north dakota", "montana", "kansas"}
+    LONE_NUM_RE = re.compile(r"^\s*[\d,]+\s*$")
+
+    for i, line in enumerate(lines):
+        c = clean(line)
+        n = norm(line)
+        stripped = line.strip()
+
+        # --- Format 1: inline headers ---
+        if "oil (mstb)" in n and "gas (mcf)" in n:
+            in_reserve_qty_table = True
+            continue
+        if "proved developed reserves" in n and "oil (barrels)" in n and "gas (mcf)" in n:
+            in_pd_by_date_table = True
+            continue
+
+        if in_reserve_qty_table and "total proved" in n:
+            nums = extract_numbers(c)
+            if len(nums) >= 2:
+                candidates.append((abs(nums[0]), abs(nums[1])))
+            in_reserve_qty_table = False
+            continue
+
+        if in_pd_by_date_table and f"december 31, {default_year}" in n:
+            nums = extract_numbers(c)
+            if len(nums) >= 2:
+                candidates.append((abs(nums[0]), abs(nums[1])))
+            in_pd_by_date_table = False
+            continue
+
+        # --- Format 2: state-by-state (SBR / DeGolyer style) ---
+        # Trigger: standalone header line (short, not buried in a prose sentence).
+        if (
+            "net proved developed producing reserves" in n
+            and len(stripped) <= 60
+            and not in_state_table
+        ):
+            in_state_table = True
+            after_total = False
+            state_table_has_states = False
+            state_table_nums = []
+            continue
+
+        if in_state_table:
+            # Track whether we've seen at least one state name (confirms we're in the right table).
+            if n in STATE_NAMES:
+                state_table_has_states = True
+
+            # "Total" on its own line signals the last aggregated row.
+            if stripped.lower() == "total" and not after_total and state_table_has_states:
+                after_total = True
+                state_table_nums = []
+                continue
+
+            if after_total:
+                if LONE_NUM_RE.match(stripped):
+                    val = float(stripped.replace(",", ""))
+                    state_table_nums.append(val)
+                elif stripped and not stripped.isspace():
+                    # First non-numeric non-blank line ends the number block.
+                    if len(state_table_nums) >= 4:
+                        # Layout: oil_mbbl, ngl_mbbl, total_liquids_mbbl, gas_mmcf
+                        oil_mbbl = state_table_nums[0]
+                        gas_mmcf = state_table_nums[3]
+                        candidates.append((oil_mbbl, gas_mmcf))
+                    elif len(state_table_nums) >= 2:
+                        candidates.append((state_table_nums[0], state_table_nums[-1]))
+                    in_state_table = False
+                    after_total = False
+                    state_table_has_states = False
+                    state_table_nums = []
+
+    # Flush state-table if file ended while collecting.
+    if after_total and len(state_table_nums) >= 4:
+        candidates.append((state_table_nums[0], state_table_nums[3]))
+
+    if not candidates:
+        return out
+
+    oil_kbbl, gas_mmcf = max(candidates, key=lambda x: x[0])
+    out.append((default_year, "proved_oil_mmbbl", oil_kbbl / 1000.0))
+    out.append((default_year, "proved_gas_bcf", gas_mmcf / 1000.0))
+    return out
+
+
+def extract_production_table(lines: List[str]) -> List[Tuple[int, str, float]]:
+    """
+    Parse annual production rows with a nearby year header:
+      Oil (barrels) ... [y1 y2 y3 values]
+      Gas (Mcf)     ... [y1 y2 y3 values]
+    """
+    out: List[Tuple[int, str, float]] = []
+    for idx, line in enumerate(lines):
+        n = norm(line)
+        if "oil (barrel" not in n and "gas (mcf" not in n and "natural gas (mcf" not in n:
+            continue
+        if "proved developed reserves" in n:
+            continue
+
+        years: List[int] = []
+        for back in range(1, 5):
+            j = idx - back
+            if j < 0:
+                break
+            ys = YEAR_RE.findall(clean(lines[j]))
+            uniq = []
+            seen = set()
+            for y in ys:
+                if y not in seen:
+                    seen.add(y)
+                    uniq.append(int(y))
+            if len(uniq) >= 2:
+                years = uniq
+                break
+        if not years:
+            continue
+
+        nums = extract_numbers(line)
+        if len(nums) < len(years):
+            continue
+        vals = nums[-len(years):]
+        label = "annual_oil_production_barrels" if "oil (barrel" in n else "annual_gas_production_mcf"
+        for i, yr in enumerate(years):
+            out.append((yr, label, vals[i]))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Core file parser
 # ---------------------------------------------------------------------------
@@ -500,7 +802,143 @@ def parse_file(path: Path) -> List[Row]:
                 "value_thousands": val,
             })
 
+    # --- Distribution totals from quarterly schedule tables ---
+    dist_totals = extract_distribution_totals(lines)
+    for yr, royalty_income_k, distributable_income_k, distribution_per_unit in dist_totals:
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "royalty_income_total",
+            "value_thousands": royalty_income_k,
+        })
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "distributable_income_total",
+            "value_thousands": distributable_income_k,
+        })
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "distribution_per_unit_total",
+            "value_thousands": distribution_per_unit,
+        })
+
+    # --- Reserve prose headline fields ---
+    reserve_rows = extract_reserve_prose(full_text, years[0] if years else None)
+    for yr, label, val in reserve_rows:
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "reserves",
+            "label": label,
+            "value_thousands": val,
+        })
+
     return rows
+
+
+def parse_model_inputs_file(path: Path) -> List[Row]:
+    """
+    Parse one *_model_inputs.txt file for supplemental reserves/operations fields.
+    """
+    ticker = path.parent.name
+    filing_date = path.stem.replace("_model_inputs", "")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    years = detect_years(lines)
+    rows: List[Row] = []
+    filing_year = None
+    try:
+        filing_year = int(filing_date.split("-")[0])
+    except Exception:
+        filing_year = None
+
+    # Distribution totals
+    dist_rows = extract_distribution_totals(lines)
+    if not dist_rows:
+        dist_rows = extract_distribution_totals_text(text)
+    for yr, royalty_income_k, distributable_income_k, distribution_per_unit in dist_rows:
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "royalty_income_total",
+            "value_thousands": royalty_income_k,
+        })
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "distributable_income_total",
+            "value_thousands": distributable_income_k,
+        })
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": "distribution_per_unit_total",
+            "value_thousands": distribution_per_unit,
+        })
+
+    # Reserve table/prose fields — prefer filing_year; fall back to detected years.
+    default_year = filing_year if filing_year else (years[0] if years else None)
+    for yr, label, val in extract_reserve_table(text, default_year):
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "reserves",
+            "label": label,
+            "value_thousands": val,
+        })
+    for yr, label, val in extract_reserve_prose(text, default_year):
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "reserves",
+            "label": label,
+            "value_thousands": val,
+        })
+
+    # Production table/prose fields
+    for yr, label, val in extract_production_table(lines):
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": label,
+            "value_thousands": val,
+        })
+    for yr, label, val in extract_production_prose(text):
+        rows.append({
+            "ticker": ticker,
+            "filing_date": filing_date,
+            "report_year": yr,
+            "section": "operations",
+            "label": label,
+            "value_thousands": val,
+        })
+
+    # De-duplicate rows by exact key while keeping first seen value.
+    deduped: Dict[Tuple[str, int, str], Row] = {}
+    for r in rows:
+        k = (r["section"], int(r["report_year"]), r["label"])
+        if k not in deduped:
+            deduped[k] = r
+    return list(deduped.values())
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +956,15 @@ KEY_METRICS = [
     ("changes", "net_price_changes"),
     ("prices",  "oil_per_bbl"),
     ("prices",  "gas_per_mcf"),
+    ("operations", "royalty_income_total"),
+    ("operations", "distributable_income_total"),
+    ("operations", "distribution_per_unit_total"),
+    ("operations", "annual_oil_production_barrels"),
+    ("operations", "annual_gas_production_mcf"),
+    ("reserves", "proved_oil_mmbbl"),
+    ("reserves", "proved_gas_bcf"),
+    ("reserves", "future_net_value_thousands"),
+    ("reserves", "discounted_value_thousands"),
 ]
 
 
@@ -611,14 +1058,15 @@ def main() -> None:
     args = ap.parse_args()
 
     out_root = Path(args.output_dir)
-    txt_files = sorted(out_root.glob("*/*_standardized_measure.txt"))
+    std_files = sorted(out_root.glob("*/*_standardized_measure.txt"))
+    model_files = sorted(out_root.glob("*/*_model_inputs.txt"))
 
-    if not txt_files:
+    if not std_files:
         print("No .txt files found under", out_root, file=sys.stderr)
         sys.exit(1)
 
     all_rows: List[Row] = []
-    for path in txt_files:
+    for path in std_files:
         ticker = path.parent.name
         if ticker == "MARPS":
             continue  # no SFAS 69 data
@@ -630,6 +1078,25 @@ def main() -> None:
             for r in rows:
                 print(f"    {r['report_year']}  {r['section']:8s}  {r['label']:35s}  {r['value_thousands']}")
         all_rows.extend(rows)
+
+    # Parse supplemental model-input windows (if present)
+    for path in model_files:
+        ticker = path.parent.name
+        if ticker == "MARPS":
+            continue
+        filing = path.stem.replace("_model_inputs", "")
+        rows = parse_model_inputs_file(path)
+        if rows:
+            print(f"  Parsing {ticker}/{filing} model-inputs ...  {len(rows)} data points")
+            all_rows.extend(rows)
+
+    # Deduplicate exact rows from overlapping sources.
+    deduped: Dict[Tuple[str, str, int, str, str], Row] = {}
+    for r in all_rows:
+        key = (r["ticker"], r["filing_date"], int(r["report_year"]), r["section"], r["label"])
+        if key not in deduped:
+            deduped[key] = r
+    all_rows = list(deduped.values())
 
     # Write long CSV
     long_path = out_root / LONG_CSV
