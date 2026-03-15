@@ -58,11 +58,24 @@ output/
 
 ## Cloudflare Worker — price oracle
 
-`cloudflare/` contains a Cloudflare Worker that runs a **monthly cron** to fetch
+`worker.js` + `wrangler.toml` define a Cloudflare Worker that runs a **monthly cron** to fetch
 WTI and HH prices from EIA and cache them in KV storage. The valuation model
 can query this endpoint instead of hitting EIA directly.
 
-See [`cloudflare/README.md`](cloudflare/README.md) for deploy instructions.
+### Deploy
+
+```bash
+# 1. Authenticate
+npx wrangler login
+
+# 2. Create KV namespace, paste the returned id into wrangler.toml
+npx wrangler kv:namespace create PRICES
+
+# 3. Deploy
+npx wrangler deploy
+```
+
+Then in the Cloudflare dashboard → Workers & Pages → oil-price-oracle → Settings → Variables and Secrets, add `EIA_API_KEY`.
 
 ## Automated updates
 
