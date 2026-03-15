@@ -1,4 +1,4 @@
-name = "oil-price-oracle"
+name = "oilroyaltyextractor"
 main = "worker.js"
 compatibility_date = "2024-09-23"
 
