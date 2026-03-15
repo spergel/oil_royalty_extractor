@@ -368,7 +368,7 @@ function render(){
   }else{
     ce.innerHTML=screened_ideas.map(s=>{
       const r=rows.find(x=>x.ticker===s.ticker)||{};
-      return '<div class="card" onclick="detail(\''+s.ticker+'\')">'+
+      return '<div class="card" data-ticker="'+s.ticker+'">'+
         '<div class="ct">'+s.ticker+'</div>'+
         '<div class="cd">'+r.desc+'</div>'+
         '<div class="cv"><div class="cvl">P / Adj PV10</div>'+
@@ -385,7 +385,7 @@ function render(){
     return av<bv?-_sd:av>bv?_sd:0;
   });
 
-  el('tbody').innerHTML=sorted.map(r=>'<tr onclick="detail(\''+r.ticker+'\')">'+
+  el('tbody').innerHTML=sorted.map(r=>'<tr data-ticker="'+r.ticker+'">'+
     '<td><strong>'+r.ticker+'</strong></td>'+
     '<td style="color:var(--mu);font-size:12px">'+r.desc+'</td>'+
     '<td style="color:var(--mu)">'+r.year+'</td>'+
@@ -461,6 +461,12 @@ function detail(ticker){
 function closePanel(){el('ov').classList.remove('open');el('panel').classList.remove('open');}
 el('xbtn').addEventListener('click',closePanel);
 el('ov').addEventListener('click',closePanel);
+
+// card + row clicks via delegation
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-ticker]');
+  if(t)detail(t.dataset.ticker);
+});
 
 // sort
 document.querySelectorAll('th[data-c]').forEach(th=>{
