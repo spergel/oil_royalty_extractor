@@ -19,80 +19,68 @@
 // ---------------------------------------------------------------------------
 
 const EIA_V2_BASE = "https://api.eia.gov/v2";
-const EIA_V1_BASE = "https://api.eia.gov/series";
+
+/**
+ * Fetch latest monthly value from an EIA v2 series id.
+ * Example ids:
+ *   PET.RWTC.M    -> WTI spot
+ *   NG.RNGWHHD.M  -> Henry Hub spot
+ */
+async function fetchLatestFromSeriesId(apiKey, seriesId) {
+  const cleanedKey = String(apiKey ?? "")
+    .trim()
+    .replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
+  if (!cleanedKey) {
+    throw new Error("Missing EIA_API_KEY");
+  }
+
+  const url = `${EIA_V2_BASE}/seriesid/${seriesId}?api_key=${encodeURIComponent(cleanedKey)}`;
+  const res = await fetch(url, {
+    headers: {
+      // EIA is stricter with anonymous API clients; send an explicit UA.
+      "User-Agent": "oil-price-oracle/1.0",
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`EIA v2 seriesid ${seriesId} HTTP ${res.status}`);
+
+  const json = await res.json();
+  const rows = json?.response?.data;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(`EIA v2 seriesid ${seriesId}: no data`);
+  }
+
+  // Prefer the most recent "YYYY-MM" period, regardless of API sort defaults.
+  let latest = rows[0];
+  for (const row of rows) {
+    if (typeof row?.period === "string" && row.period > latest.period) {
+      latest = row;
+    }
+  }
+  if (latest?.value == null) {
+    throw new Error(`EIA v2 seriesid ${seriesId}: latest row has no value`);
+  }
+
+  const value = parseFloat(latest.value);
+  if (!Number.isFinite(value)) {
+    throw new Error(`EIA v2 seriesid ${seriesId}: invalid numeric value`);
+  }
+  return { value, period: latest.period, source: "eia-v2-seriesid" };
+}
 
 /**
  * Fetch WTI spot price ($/bbl) — most recent monthly value.
- * Tries EIA v2 first, falls back to v1.
  */
 async function fetchWTI(apiKey) {
-  // v2 attempt
-  try {
-    const url =
-      `${EIA_V2_BASE}/petroleum/pri/spt/data/` +
-      `?api_key=${apiKey}` +
-      `&frequency=monthly` +
-      `&data[0]=value` +
-      `&facets[series][]=RWTC` +
-      `&sort[0][column]=period&sort[0][direction]=desc` +
-      `&length=1`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`EIA v2 WTI HTTP ${res.status}`);
-    const json = await res.json();
-    const row = json?.response?.data?.[0];
-    if (row?.value != null) {
-      return { value: parseFloat(row.value), period: row.period, source: "eia-v2" };
-    }
-    throw new Error("EIA v2 WTI: no data in response");
-  } catch (err) {
-    console.warn("WTI v2 failed:", err.message, "— trying v1");
-  }
-
-  // v1 fallback
-  const url = `${EIA_V1_BASE}/?api_key=${apiKey}&series_id=PET.RWTC.M&num=1`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`EIA v1 WTI HTTP ${res.status}`);
-  const json = await res.json();
-  const dataPoint = json?.series?.[0]?.data?.[0]; // ["2024-12", 69.97]
-  if (!dataPoint) throw new Error("EIA v1 WTI: no data");
-  return { value: parseFloat(dataPoint[1]), period: dataPoint[0], source: "eia-v1" };
+  return fetchLatestFromSeriesId(apiKey, "PET.RWTC.M");
 }
 
 /**
  * Fetch Henry Hub natural gas spot price ($/MMBtu) — most recent monthly value.
- * Tries EIA v2 first, falls back to v1.
  */
 async function fetchHenryHub(apiKey) {
-  // v2 attempt
-  try {
-    const url =
-      `${EIA_V2_BASE}/natural-gas/pri/sum/data/` +
-      `?api_key=${apiKey}` +
-      `&frequency=monthly` +
-      `&data[0]=value` +
-      `&facets[series][]=RNGWHHD` +
-      `&sort[0][column]=period&sort[0][direction]=desc` +
-      `&length=1`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`EIA v2 HH HTTP ${res.status}`);
-    const json = await res.json();
-    const row = json?.response?.data?.[0];
-    if (row?.value != null) {
-      return { value: parseFloat(row.value), period: row.period, source: "eia-v2" };
-    }
-    throw new Error("EIA v2 HH: no data in response");
-  } catch (err) {
-    console.warn("HH v2 failed:", err.message, "— trying v1");
-  }
-
-  // v1 fallback
-  const url = `${EIA_V1_BASE}/?api_key=${apiKey}&series_id=NG.RNGWHHD.M&num=1`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`EIA v1 HH HTTP ${res.status}`);
-  const json = await res.json();
-  const dataPoint = json?.series?.[0]?.data?.[0];
-  if (!dataPoint) throw new Error("EIA v1 HH: no data");
-  return { value: parseFloat(dataPoint[1]), period: dataPoint[0], source: "eia-v1" };
+  return fetchLatestFromSeriesId(apiKey, "NG.RNGWHHD.M");
 }
 
 /**

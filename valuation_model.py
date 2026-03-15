@@ -64,9 +64,8 @@ SEC_OIL_DEFAULTS = {
 
 DATA_CSV = Path(__file__).parent / "output" / "standardized_measure_data.csv"
 
-# EIA API endpoints
+# EIA API endpoint
 _EIA_V2_BASE = "https://api.eia.gov/v2"
-_EIA_V1_BASE = "https://api.eia.gov/series"
 
 
 # ---------------------------------------------------------------------------
@@ -81,63 +80,44 @@ def _get(url: str, timeout: int = 15):
         return json.loads(r.read())
 
 
-def _eia_v2_price(api_key: str, route: str, series: str) -> Tuple[float, str]:
+def _eia_v2_price_seriesid(api_key: str, series_id: str) -> Tuple[float, str]:
     """
-    Fetch most recent monthly value from EIA API v2.
+    Fetch most recent monthly value from EIA API v2 seriesid endpoint.
     Returns (price, period_string).
     """
-    url = (
-        f"{_EIA_V2_BASE}/{route}/data/"
-        f"?api_key={api_key}"
-        f"&frequency=monthly"
-        f"&data[0]=value"
-        f"&facets[series][]={series}"
-        f"&sort[0][column]=period&sort[0][direction]=desc"
-        f"&length=1"
-    )
+    cleaned_key = str(api_key).strip().strip("'").strip('"')
+    if not cleaned_key:
+        raise ValueError("missing EIA API key")
+    url = f"{_EIA_V2_BASE}/seriesid/{series_id}?api_key={cleaned_key}"
     data = _get(url)
-    row = data["response"]["data"][0]
-    return float(row["value"]), row["period"]
-
-
-def _eia_v1_price(api_key: str, series_id: str) -> Tuple[float, str]:
-    """Fetch most recent monthly value from EIA API v1 (fallback)."""
-    url = f"{_EIA_V1_BASE}/?api_key={api_key}&series_id={series_id}&num=1"
-    data = _get(url)
-    point = data["series"][0]["data"][0]   # ["2024-12", 69.97]
-    return float(point[1]), str(point[0])
+    rows = data.get("response", {}).get("data", [])
+    if not rows:
+        raise ValueError(f"EIA v2 returned no data for {series_id}")
+    # Rows are typically descending; max() is defensive.
+    row = max(rows, key=lambda r: str(r.get("period", "")))
+    return float(row["value"]), str(row["period"])
 
 
 def fetch_eia_prices(api_key: str) -> Tuple[float, float]:
     """
     Returns (wti_per_bbl, hh_per_mmbtu) from EIA.
-    Tries v2 first; falls back to v1 for each commodity independently.
+    Uses EIA v2 seriesid endpoints.
     """
     # WTI crude oil
     try:
-        wti, wti_period = _eia_v2_price(api_key, "petroleum/pri/spt", "RWTC")
-        print(f"  EIA WTI  {wti_period}: ${wti:.2f}/bbl  (v2)")
+        wti, wti_period = _eia_v2_price_seriesid(api_key, "PET.RWTC.M")
+        print(f"  EIA WTI  {wti_period}: ${wti:.2f}/bbl  (v2 seriesid)")
     except Exception as e:
-        print(f"  EIA WTI v2 failed ({e}), trying v1 ...")
-        try:
-            wti, wti_period = _eia_v1_price(api_key, "PET.RWTC.M")
-            print(f"  EIA WTI  {wti_period}: ${wti:.2f}/bbl  (v1)")
-        except Exception as e2:
-            print(f"  EIA WTI v1 also failed ({e2}), using default $72.00", file=sys.stderr)
-            wti = 72.0
+        print(f"  EIA WTI v2 seriesid failed ({e}), using default $72.00", file=sys.stderr)
+        wti = 72.0
 
     # Henry Hub natural gas
     try:
-        hh, hh_period = _eia_v2_price(api_key, "natural-gas/pri/sum", "RNGWHHD")
-        print(f"  EIA HH   {hh_period}: ${hh:.3f}/MMBtu  (v2)")
+        hh, hh_period = _eia_v2_price_seriesid(api_key, "NG.RNGWHHD.M")
+        print(f"  EIA HH   {hh_period}: ${hh:.3f}/MMBtu  (v2 seriesid)")
     except Exception as e:
-        print(f"  EIA HH v2 failed ({e}), trying v1 ...")
-        try:
-            hh, hh_period = _eia_v1_price(api_key, "NG.RNGWHHD.M")
-            print(f"  EIA HH   {hh_period}: ${hh:.3f}/MMBtu  (v1)")
-        except Exception as e2:
-            print(f"  EIA HH v1 also failed ({e2}), using default $2.50", file=sys.stderr)
-            hh = 2.50
+        print(f"  EIA HH v2 seriesid failed ({e}), using default $2.50", file=sys.stderr)
+        hh = 2.50
 
     return wti, hh
 
@@ -217,6 +197,24 @@ def fmt_m(v: float) -> str:
 
 def fmt_pct(v: float) -> str:
     return f"{v:>7.1f}%"
+
+
+def fmt_opt_pct(v: Optional[float], width: int = 8, decimals: int = 1) -> str:
+    if v is None:
+        return f"{'n/a':>{width}s}"
+    return f"{v * 100:>{width}.{decimals}f}%"
+
+
+def fmt_opt_x(v: Optional[float], width: int = 8, decimals: int = 2) -> str:
+    if v is None:
+        return f"{'n/a':>{width}s}"
+    return f"{v:>{width}.{decimals}f}x"
+
+
+def safe_div(n: Optional[float], d: Optional[float], min_abs_d: float = 1e-9) -> Optional[float]:
+    if n is None or d is None or abs(d) < min_abs_d:
+        return None
+    return n / d
 
 
 def bar(ratio: float, width: int = 20) -> str:
@@ -315,6 +313,7 @@ def main() -> None:
     print("-" * len(header))
 
     tickers_with_data = sorted(t for t in meta if t in data)
+    extra_rows = []
     for ticker in tickers_with_data:
         result = latest_pv10(data, ticker)
         if result is None:
@@ -345,12 +344,114 @@ def main() -> None:
             f"{adj_pv10_k/1000:>10,.1f}  {p_adj_pv10:>10.2f}x"
         )
 
+        # Additional valuation diagnostics from SFAS 69 components
+        yr_main = data[ticker].get(yr, {}).get("main", {})
+        yr_changes = data[ticker].get(yr, {}).get("changes", {})
+
+        future_cash_inflows = yr_main.get("future_cash_inflows")
+        future_net_cash_flows = yr_main.get("future_net_cash_flows")
+        future_prod_costs = yr_main.get("future_production_costs")
+        future_dev_costs = yr_main.get("future_development_costs")
+        future_prod_taxes = yr_main.get("future_production_taxes")
+        future_income_tax = yr_main.get("future_income_tax")
+        pv10_discount = yr_main.get("pv10_discount")
+        end_sm = yr_changes.get("end_standardized_measure")
+        if end_sm is None:
+            end_sm = pv10_k
+
+        # Costs/taxes in this dataset are often negative cash outflows.
+        total_cost_outflow = None
+        if any(v is not None for v in [future_prod_costs, future_dev_costs, future_prod_taxes]):
+            total_cost_outflow = sum(abs(v or 0.0) for v in [future_prod_costs, future_dev_costs, future_prod_taxes])
+        # Denominator is in $thousands; skip ratios when inflows are tiny/noisy.
+        cost_burden = safe_div(total_cost_outflow, future_cash_inflows, min_abs_d=1_000.0)
+        tax_burden = safe_div(abs(future_income_tax) if future_income_tax is not None else None, future_cash_inflows, min_abs_d=1_000.0)
+        discount_drag = safe_div(abs(pv10_discount) if pv10_discount is not None else None, future_net_cash_flows)
+
+        sales_reserves = yr_changes.get("sales_reserves")
+        extensions_discoveries = yr_changes.get("extensions_discoveries")
+        purchases_reserves = yr_changes.get("purchases_reserves")
+        reserve_additions = (extensions_discoveries or 0.0) + (purchases_reserves or 0.0)
+        reserve_replacement = safe_div(reserve_additions, abs(sales_reserves) if sales_reserves is not None else None)
+
+        net_price_changes = yr_changes.get("net_price_changes")
+        price_leverage = safe_div(net_price_changes, end_sm)
+
+        # Suppress extreme outliers often caused by tiny/noisy denominators.
+        if cost_burden is not None and cost_burden > 5.0:
+            cost_burden = None
+        if tax_burden is not None and tax_burden > 2.0:
+            tax_burden = None
+        if discount_drag is not None and discount_drag > 2.0:
+            discount_drag = None
+        if reserve_replacement is not None and reserve_replacement > 10.0:
+            reserve_replacement = None
+
+        extra_rows.append({
+            "ticker": ticker,
+            "year": yr,
+            "p_adj_pv10": p_adj_pv10,
+            "cost_burden": cost_burden,
+            "tax_burden": tax_burden,
+            "discount_drag": discount_drag,
+            "reserve_replacement": reserve_replacement,
+            "price_leverage": price_leverage,
+        })
+
     print()
+    if extra_rows:
+        print("Additional diagnostics (latest standardized-measure year)")
+        diag_header = (
+            f"{'Ticker':6s}  {'Year':4s}  {'P/AdjPV10':>9s}  {'Cost/Inflow':>11s}  "
+            f"{'Tax/Inflow':>10s}  {'DiscDrag':>9s}  {'ResRepl':>8s}  {'PriceLev':>9s}"
+        )
+        print(diag_header)
+        print("-" * len(diag_header))
+
+        for row in sorted(extra_rows, key=lambda r: r["p_adj_pv10"]):
+            print(
+                f"{row['ticker']:6s}  {row['year']}  "
+                f"{row['p_adj_pv10']:>9.2f}x  "
+                f"{fmt_opt_pct(row['cost_burden'], 11, 1)}  "
+                f"{fmt_opt_pct(row['tax_burden'], 10, 1)}  "
+                f"{fmt_opt_pct(row['discount_drag'], 9, 1)}  "
+                f"{fmt_opt_x(row['reserve_replacement'], 8, 2)}  "
+                f"{fmt_opt_pct(row['price_leverage'], 9, 1)}"
+            )
+        print()
+
+        # A practical "best ideas" screen: cheap + not structurally ugly.
+        def passes_if_present(val: Optional[float], threshold: float) -> bool:
+            return val is None or val <= threshold
+
+        screened = [
+            r for r in extra_rows
+            if r["p_adj_pv10"] <= 1.6
+            and passes_if_present(r["cost_burden"], 0.65)
+            and passes_if_present(r["tax_burden"], 0.20)
+            and passes_if_present(r["discount_drag"], 0.55)
+        ]
+        screened.sort(key=lambda r: r["p_adj_pv10"])
+
+        print("Screened ideas (cheap + lower cost/tax/discount burden; missing fields allowed)")
+        if screened:
+            print("  " + ", ".join(
+                f"{r['ticker']} ({r['p_adj_pv10']:.2f}x)" for r in screened
+            ))
+        else:
+            print("  none pass current thresholds")
+        print()
+
     print(
         "Notes:\n"
         "  PV10      = standardized measure (SEC 12-mo avg prices, 10% discount)\n"
         "  Adj PV10  = PV10 scaled by (current_oil / sec_oil) -- rough oil repricing only\n"
         "  P/PV10    = market_cap / PV10 (< 1.0x = trading below SEC reserve value)\n"
+        "  Cost/Inflow = (prod + dev + prod taxes) / future cash inflows (lower is better)\n"
+        "  Tax/Inflow  = future income tax / future cash inflows (lower is better)\n"
+        "  DiscDrag    = PV10 discount impact / future net cash flows (lower is better)\n"
+        "  ResRepl     = (extensions + purchases) / sales of reserves (>1.0x is favorable)\n"
+        "  PriceLev    = net price changes / ending standardized measure (higher = more price-sensitive)\n"
         "  Prices and units outstanding are approximate -- update TRUST_META in script\n"
         f"  Strip prices used: WTI ${current_oil:.2f}/bbl, HH ${current_gas:.2f}/MMBtu"
     )

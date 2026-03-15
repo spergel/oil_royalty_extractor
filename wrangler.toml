@@ -13,8 +13,7 @@ crons = ["17 14 1 * *"]
 binding = "OIL_KV_BINDING"
 id     = "6106862e203f48e88680306205fd5664"
 
-# ---- EIA API key — set in Cloudflare dashboard as an environment variable ----
-# Workers & Pages -> oil-price-oracle -> Settings -> Variables and Secrets
-# Add variable: EIA_API_KEY = <your key>
-[vars]
-EIA_API_KEY = ""   # placeholder; override in Cloudflare dashboard
+# ---- EIA API key ----
+# Local dev: place `EIA_API_KEY=...` in `.env` (used by `wrangler dev`).
+# Deployed worker: set the secret in Cloudflare dashboard or via:
+#   wrangler secret put EIA_API_KEY
