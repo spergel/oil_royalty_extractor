@@ -157,24 +157,342 @@ const MODEL_DIAGNOSTICS = {
   VOC: { cost_burden: null, tax_burden: null, discount_drag: 0.2435164036, reserve_replacement: null, price_leverage: -0.1646462540 },
 };
 
-const FRONTEND_HTML = `<!doctype html>
+const LANDING_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Oil Trust Model</title>
-<style>body{font-family:Arial;margin:0;background:#111;color:#eee}main{max-width:1100px;margin:0 auto;padding:20px}input,select,button{padding:8px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#eee}button{background:#2d66f6;border:none}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{padding:8px;border-bottom:1px solid #333;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.row{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px}.pill{display:inline-block;background:#253046;padding:4px 8px;border-radius:999px;margin-right:6px}</style>
-</head><body><main><h2>Oil Royalty Trust Model</h2><div class="row"><div><label>WTI</label><input id="oil" type="number" step="0.01" value="64.51"></div><div><label>HH</label><input id="gas" type="number" step="0.01" value="3.62"></div><div><label>Metric</label><select id="metric"><option value="p_adj_pv10">P/AdjPV10</option><option value="p_pv10">P/PV10</option><option value="market_cap_m">Mkt Cap</option><option value="pv10_m">PV10</option><option value="adj_pv10_m">Adj PV10</option></select></div><div><label>Order</label><select id="order"><option value="asc">asc</option><option value="desc">desc</option></select></div><div><label>Top</label><input id="top" type="number" min="1" max="100" value="12"></div><div><label>&nbsp;</label><button id="run">Run</button></div></div><p id="meta"></p><div id="screened"></div><table><thead><tr><th>Ticker</th><th>Description</th><th>Year</th><th>PV10</th><th>Mkt Cap</th><th>P/PV10</th><th>SEC Oil</th><th>Adj PV10</th><th>P/AdjPV10</th></tr></thead><tbody id="tbody"></tbody></table></main>
+<title>Oil Royalty Extractor</title>
+<style>body{font-family:Arial,Helvetica,sans-serif;background:#0f1115;color:#e8eaf0;margin:0}main{max-width:900px;margin:0 auto;padding:24px}.card{background:#171a21;border:1px solid #2b3140;border-radius:10px;padding:14px;margin:10px 0}a{color:#84a8ff;text-decoration:none}.muted{color:#b8becc;font-size:.95rem}button{padding:8px 12px;border-radius:8px;border:none;background:#2d66f6;color:white;cursor:pointer}</style>
+</head><body><main><h2>Oil Royalty Extractor Worker</h2>
+<p class="muted">Use the links below to view prices, run an immediate refresh, or open the valuation model UI.</p>
+<div class="card"><strong>Valuation App</strong><div><a href="/app">/app</a></div></div>
+<div class="card"><strong>Latest Prices (JSON)</strong><div><a href="/prices/latest">/prices/latest</a></div></div>
+<div class="card"><strong>Price History (JSON)</strong><div><a href="/prices/history">/prices/history</a></div></div>
+<div class="card"><strong>Manual Refresh</strong><div class="muted">POST /refresh fetches latest EIA prices and stores snapshot in KV.</div><button id="refreshBtn">Run refresh</button><pre id="out"></pre></div>
+<script>document.getElementById('refreshBtn').addEventListener('click',async()=>{const o=document.getElementById('out');o.textContent='Running...';try{const r=await fetch('/refresh',{method:'POST'});o.textContent=await r.text();}catch(e){o.textContent=String(e);}});</script>
+</main></body></html>`;
+
+const FRONTEND_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Oil Royalty Trust Screener</title>
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bd:#30363d;--tx:#e6edf3;--mu:#8b949e;--ac:#388bfd;--gn:#3fb950;--ye:#d29922;--or:#db6d28;--rd:#f85149}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);font-size:14px;line-height:1.5}
+.wrap{max-width:1200px;margin:0 auto;padding:16px 20px}
+/* header */
+header{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+h1{font-size:1.2rem;font-weight:700;white-space:nowrap}
+.price-bar{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;font-size:12px;color:var(--mu)}
+.price-bar strong{color:var(--tx)}
+/* controls */
+.controls{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:12px 16px;margin-bottom:22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.presets{display:flex;gap:6px}
+.pbtn{padding:5px 13px;border:1px solid var(--bd);border-radius:6px;background:var(--bg3);color:var(--tx);cursor:pointer;font-size:12px;transition:background .12s}
+.pbtn:hover,.pbtn.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.sep{width:1px;height:28px;background:var(--bd)}
+.inputs{display:flex;gap:10px;align-items:flex-end}
+.inputs label{font-size:11px;color:var(--mu);display:flex;flex-direction:column;gap:3px}
+.inputs input{width:88px;padding:5px 8px;background:var(--bg3);border:1px solid var(--bd);border-radius:6px;color:var(--tx);font-size:13px}
+.gobtn{padding:6px 16px;background:var(--ac);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;font-weight:600;align-self:flex-end}
+.gobtn:hover{opacity:.85}
+/* section */
+.sh{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.sh h2{font-size:.95rem;font-weight:600}
+.sh small{font-size:11px;color:var(--mu)}
+/* cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-bottom:26px}
+.card{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:14px;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:var(--ac)}
+.ct{font-size:1.05rem;font-weight:700}
+.cd{font-size:11px;color:var(--mu);margin-top:2px}
+.cv{margin-top:10px}
+.cvl{font-size:11px;color:var(--mu)}
+.cval{font-size:1.5rem;font-weight:700}
+.none{color:var(--mu);font-size:13px;padding:8px 0}
+/* table */
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{padding:8px 10px;text-align:right;font-size:11px;color:var(--mu);border-bottom:1px solid var(--bd);cursor:pointer;white-space:nowrap;user-select:none}
+th:first-child,th:nth-child(2){text-align:left}
+th:hover{color:var(--tx)}
+th.on{color:var(--ac)}
+td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--bd);font-size:13px}
+td:first-child,td:nth-child(2){text-align:left}
+tr:hover td{background:var(--bg2)}
+tr{cursor:pointer}
+/* color scale */
+.ga{color:#3fb950;font-weight:700}.gb{color:#56d364;font-weight:700}
+.gc{color:#d29922;font-weight:600}.gd{color:#db6d28}.gf{color:#f85149}
+/* panel */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100}
+.ov.open{display:block}
+.panel{position:fixed;right:0;top:0;bottom:0;width:min(460px,100vw);background:var(--bg2);border-left:1px solid var(--bd);overflow-y:auto;z-index:101;transform:translateX(100%);transition:transform .22s ease}
+.panel.open{transform:none}
+.ph{padding:18px 20px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:flex-start}
+.ptk{font-size:1.5rem;font-weight:800}
+.pds{font-size:12px;color:var(--mu);margin-top:2px}
+.xbtn{background:none;border:none;color:var(--mu);cursor:pointer;font-size:1.3rem;padding:2px 4px}
+.pb{padding:18px 20px}
+.mg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px}
+.mb{background:var(--bg3);border-radius:8px;padding:11px}
+.mbl{font-size:11px;color:var(--mu);margin-bottom:3px}
+.mbv{font-size:1.2rem;font-weight:700}
+.st{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mu);margin:16px 0 8px}
+.cl{display:flex;flex-direction:column;gap:6px}
+.ci{display:flex;align-items:center;gap:7px;font-size:13px}
+.ck{font-size:15px}
+.ck.ok{color:var(--gn)}.ck.no{color:var(--rd)}.ck.na{color:var(--mu)}
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sb{background:var(--bg3);border-radius:6px;padding:9px;text-align:center}
+.sbl{font-size:11px;color:var(--mu)}
+.sbv{font-size:1.05rem;font-weight:700;margin-top:3px}
+.dl{border-bottom:1px solid var(--bd);padding:7px 0;display:flex;justify-content:space-between;font-size:13px}
+.dl span:first-child{color:var(--mu)}
+.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg3);color:var(--mu);margin-right:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Oil Royalty Trust Screener</h1>
+    <div class="price-bar" id="pbar">Fetching prices&hellip;</div>
+  </header>
+
+  <div class="controls">
+    <div class="presets">
+      <button class="pbtn" data-oil="55" data-gas="2.0">Bear $55</button>
+      <button class="pbtn on" data-oil="70" data-gas="2.5">Base $70</button>
+      <button class="pbtn" data-oil="85" data-gas="3.5">Bull $85</button>
+    </div>
+    <div class="sep"></div>
+    <div class="inputs">
+      <label>WTI $/bbl<input id="oil" type="number" step="0.5" value="70"></label>
+      <label>HH $/MMBtu<input id="gas" type="number" step="0.05" value="2.50"></label>
+    </div>
+    <button class="gobtn" id="run">Update</button>
+  </div>
+
+  <div class="sh">
+    <h2>Passing Screen</h2>
+    <small>P/AdjPV10 &le; 1.6 &bull; cost burden &le; 65% &bull; tax burden &le; 20% &bull; discount drag &le; 55%</small>
+  </div>
+  <div class="cards" id="cards"><div class="none">Loading&hellip;</div></div>
+
+  <div class="sh" style="margin-top:4px"><h2>All Trusts</h2><small>Click a row for details &bull; click column headers to sort</small></div>
+  <div class="tw">
+    <table>
+      <thead><tr>
+        <th data-c="ticker">Ticker</th>
+        <th data-c="desc">Name</th>
+        <th data-c="year">Year</th>
+        <th data-c="pv10_m">PV10 ($M)</th>
+        <th data-c="market_cap_m">Mkt Cap ($M)</th>
+        <th data-c="p_pv10">P/PV10</th>
+        <th data-c="sec_oil">SEC Oil</th>
+        <th data-c="adj_pv10_m">Adj PV10 ($M)</th>
+        <th data-c="p_adj_pv10">P/AdjPV10</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- detail panel -->
+<div class="ov" id="ov"></div>
+<div class="panel" id="panel">
+  <div class="ph">
+    <div>
+      <div class="ptk" id="ptk"></div>
+      <div class="pds" id="pds"></div>
+    </div>
+    <button class="xbtn" id="xbtn">&times;</button>
+  </div>
+  <div class="pb">
+    <div class="mg">
+      <div class="mb"><div class="mbl">P / AdjPV10</div><div class="mbv" id="p-padj">--</div></div>
+      <div class="mb"><div class="mbl">P / PV10</div><div class="mbv" id="p-ppv10">--</div></div>
+      <div class="mb"><div class="mbl">PV10</div><div class="mbv" id="p-pv10">--</div></div>
+      <div class="mb"><div class="mbl">Market Cap</div><div class="mbv" id="p-mc">--</div></div>
+    </div>
+    <div class="st">Screen Criteria</div>
+    <div class="cl" id="p-crit"></div>
+    <div class="st">Price Sensitivity &mdash; P/AdjPV10</div>
+    <div class="sg" id="p-sens"></div>
+    <div class="st">Diagnostics</div>
+    <div id="p-diag"></div>
+    <div class="st">Filing</div>
+    <div><span class="tag" id="p-yr"></span><span class="tag" id="p-so"></span></div>
+  </div>
+</div>
+
 <script>
-const $=id=>document.getElementById(id);
-const n=(v,d=2)=>v==null?'n/a':Number(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
-const x=v=>v==null?'n/a':n(v,2)+'x';
-async function run(){const oil=$('oil').value,gas=$('gas').value,metric=$('metric').value,order=$('order').value,top=$('top').value;
-const ranked=await fetch('/valuation/ranked?oil='+encodeURIComponent(oil)+'&gas='+encodeURIComponent(gas)+'&metric='+metric+'&order='+order+'&top='+top).then(r=>r.json());
-const latest=await fetch('/valuation/latest?oil='+encodeURIComponent(oil)+'&gas='+encodeURIComponent(gas)).then(r=>r.json());
-$('meta').textContent='source='+ranked.inputs.price_source+' | WTI $'+n(ranked.inputs.wti_per_bbl,2)+' | HH $'+n(ranked.inputs.hh_per_mmbtu,3)+' | '+ranked.as_of;
-$('screened').innerHTML=(latest.screened_ideas||[]).map(r=>'<span class="pill">'+r.ticker+' ('+x(r.p_adj_pv10)+')</span>').join('')||'<span class="pill">none</span>';
-const tb=$('tbody');tb.innerHTML='';for(const r of ranked.rows||[]){const tr=document.createElement('tr');tr.innerHTML='<td>'+r.ticker+'</td><td>'+r.desc+'</td><td>'+r.year+'</td><td>'+n(r.pv10_m,1)+'</td><td>'+n(r.market_cap_m,1)+'</td><td>'+x(r.p_pv10)+'</td><td>'+n(r.sec_oil,2)+'</td><td>'+n(r.adj_pv10_m,1)+'</td><td>'+x(r.p_adj_pv10)+'</td>';tb.appendChild(tr);}
+const f=(v,d=1)=>v==null?'n/a':Number(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+const fx=v=>v==null?'n/a':f(v,2)+'x';
+const fp=v=>v==null?'n/a':(v*100).toFixed(1)+'%';
+const el=id=>document.getElementById(id);
+
+function gc(v){
+  if(v==null)return'';
+  if(v<0.8)return'ga';if(v<1.2)return'gb';if(v<1.6)return'gc';if(v<2.0)return'gd';return'gf';
 }
-$('run').addEventListener('click',run);run();
-</script></body></html>`;
+
+let _d=null,_sc='p_adj_pv10',_sd=1;
+
+async function load(){
+  const oil=parseFloat(el('oil').value)||70;
+  const gas=parseFloat(el('gas').value)||2.5;
+  try{
+    const res=await fetch('/valuation/latest?oil='+encodeURIComponent(oil)+'&gas='+encodeURIComponent(gas));
+    _d=await res.json();
+    render();
+  }catch(e){console.error(e);}
+}
+
+function render(){
+  if(!_d)return;
+  const{rows,diagnostics,screened_ideas,inputs,as_of}=_d;
+
+  // price bar
+  const src=inputs.price_source==='kv_latest'?'live (KV)':inputs.price_source;
+  el('pbar').innerHTML='WTI <strong>$'+f(inputs.wti_per_bbl,2)+'</strong> &nbsp;|&nbsp; HH <strong>$'+f(inputs.hh_per_mmbtu,3)+'</strong> &nbsp;|&nbsp; '+src+' &nbsp;|&nbsp; '+new Date(as_of).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+
+  // build diag map
+  const dm={};(diagnostics||[]).forEach(d=>dm[d.ticker]=d);
+
+  // screened cards
+  const ce=el('cards');
+  if(!screened_ideas||screened_ideas.length===0){
+    ce.innerHTML='<div class="none">No trusts pass all screen criteria at current prices.</div>';
+  }else{
+    ce.innerHTML=screened_ideas.map(s=>{
+      const r=rows.find(x=>x.ticker===s.ticker)||{};
+      return '<div class="card" onclick="detail(\''+s.ticker+'\')">'+
+        '<div class="ct">'+s.ticker+'</div>'+
+        '<div class="cd">'+r.desc+'</div>'+
+        '<div class="cv"><div class="cvl">P / Adj PV10</div>'+
+        '<div class="cval '+gc(s.p_adj_pv10)+'">'+fx(s.p_adj_pv10)+'</div></div>'+
+        '</div>';
+    }).join('');
+  }
+
+  // sort table rows
+  const sorted=[...rows].sort((a,b)=>{
+    const av=a[_sc],bv=b[_sc];
+    if(av==null&&bv==null)return 0;
+    if(av==null)return 1;if(bv==null)return -1;
+    return av<bv?-_sd:av>bv?_sd:0;
+  });
+
+  el('tbody').innerHTML=sorted.map(r=>'<tr onclick="detail(\''+r.ticker+'\')">'+
+    '<td><strong>'+r.ticker+'</strong></td>'+
+    '<td style="color:var(--mu);font-size:12px">'+r.desc+'</td>'+
+    '<td style="color:var(--mu)">'+r.year+'</td>'+
+    '<td>$'+f(r.pv10_m)+'M</td>'+
+    '<td>$'+f(r.market_cap_m)+'M</td>'+
+    '<td class="'+gc(r.p_pv10)+'">'+fx(r.p_pv10)+'</td>'+
+    '<td style="color:var(--mu)">$'+f(r.sec_oil,2)+'</td>'+
+    '<td>$'+f(r.adj_pv10_m)+'M</td>'+
+    '<td class="'+gc(r.p_adj_pv10)+'" style="font-size:15px">'+fx(r.p_adj_pv10)+'</td>'+
+  '</tr>').join('');
+
+  document.querySelectorAll('th[data-c]').forEach(th=>th.classList.toggle('on',th.dataset.c===_sc));
+}
+
+function detail(ticker){
+  if(!_d)return;
+  const row=_d.rows.find(r=>r.ticker===ticker)||{};
+  const dm={};(_d.diagnostics||[]).forEach(d=>dm[d.ticker]=d);
+  const diag=dm[ticker]||{};
+
+  el('ptk').textContent=ticker;
+  el('pds').textContent=row.desc||'';
+  el('p-padj').innerHTML='<span class="'+gc(row.p_adj_pv10)+'">'+fx(row.p_adj_pv10)+'</span>';
+  el('p-ppv10').innerHTML='<span class="'+gc(row.p_pv10)+'">'+fx(row.p_pv10)+'</span>';
+  el('p-pv10').textContent=row.pv10_m!=null?'$'+f(row.pv10_m)+'M':'--';
+  el('p-mc').textContent=row.market_cap_m!=null?'$'+f(row.market_cap_m)+'M':'--';
+  el('p-yr').textContent='Filing year: '+(row.year||'--');
+  el('p-so').textContent='SEC oil: $'+f(row.sec_oil,2)+'/bbl';
+
+  // criteria
+  const pass=(v,t)=>v==null?null:v<=t;
+  const crit=[
+    {lbl:'P/AdjPV10 \u2264 1.6',     v:pass(diag.p_adj_pv10,1.6)},
+    {lbl:'Cost burden \u2264 65%',    v:pass(diag.cost_burden,0.65)},
+    {lbl:'Tax burden \u2264 20%',     v:pass(diag.tax_burden,0.20)},
+    {lbl:'Discount drag \u2264 55%',  v:pass(diag.discount_drag,0.55)},
+  ];
+  el('p-crit').innerHTML=crit.map(c=>{
+    const icon=c.v===null?'\u25CB':c.v?'\u2713':'\u2717';
+    const cls=c.v===null?'na':c.v?'ok':'no';
+    const note=c.v===null?'<span style="color:var(--mu);font-size:11px"> (no data)</span>':'';
+    return '<div class="ci"><span class="ck '+cls+'">'+icon+'</span>'+c.lbl+note+'</div>';
+  }).join('');
+
+  // sensitivity
+  const sens=[{lbl:'Bear $55',oil:55},{lbl:'Base $70',oil:70},{lbl:'Bull $85',oil:85}];
+  if(row.pv10_m&&row.sec_oil>0&&row.market_cap_m){
+    el('p-sens').innerHTML=sens.map(s=>{
+      const adj=row.pv10_m*(s.oil/row.sec_oil);
+      const p=row.market_cap_m/adj;
+      return '<div class="sb"><div class="sbl">'+s.lbl+'</div><div class="sbv '+gc(p)+'">'+fx(p)+'</div></div>';
+    }).join('');
+  }else{
+    el('p-sens').innerHTML='<div class="none">SEC oil price unavailable</div>';
+  }
+
+  // diagnostics
+  const dfs=[
+    {k:'cost_burden',        l:'Cost Burden',        f:fp},
+    {k:'tax_burden',         l:'Tax Burden',         f:fp},
+    {k:'discount_drag',      l:'Discount Drag',      f:fp},
+    {k:'reserve_replacement',l:'Reserve Replacement',f:v=>f(v,2)+'x'},
+    {k:'price_leverage',     l:'Price Leverage',     f:v=>f(v,4)},
+  ];
+  el('p-diag').innerHTML=dfs.map(df=>{
+    const v=diag[df.k];
+    return '<div class="dl"><span>'+df.l+'</span><span>'+(v==null?'<span style="color:var(--mu)">n/a</span>':df.f(v))+'</span></div>';
+  }).join('');
+
+  el('ov').classList.add('open');el('panel').classList.add('open');
+}
+
+function closePanel(){el('ov').classList.remove('open');el('panel').classList.remove('open');}
+el('xbtn').addEventListener('click',closePanel);
+el('ov').addEventListener('click',closePanel);
+
+// sort
+document.querySelectorAll('th[data-c]').forEach(th=>{
+  th.addEventListener('click',()=>{
+    if(_sc===th.dataset.c)_sd*=-1;else{_sc=th.dataset.c;_sd=1;}
+    render();
+  });
+});
+
+// presets
+document.querySelectorAll('.pbtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    el('oil').value=btn.dataset.oil;
+    el('gas').value=btn.dataset.gas;
+    document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    load();
+  });
+});
+['oil','gas'].forEach(id=>el(id).addEventListener('input',()=>
+  document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'))
+));
+
+el('run').addEventListener('click',load);
+
+// init: try to pull live prices from KV to pre-fill inputs
+fetch('/prices/latest').then(r=>r.ok?r.json():null).then(p=>{
+  if(p?.wti_per_bbl){el('oil').value=p.wti_per_bbl.toFixed(2);el('gas').value=p.hh_per_mmbtu.toFixed(2);}
+}).catch(()=>{}).finally(()=>load());
+</script>
+</body>
+</html>`;
 
 function fmtNow() {
   return new Date().toISOString();
@@ -256,10 +574,29 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/") {
+      return Response.redirect(new URL("/app", request.url).toString(), 302);
+    }
+
     if (url.pathname === "/app") {
       return new Response(FRONTEND_HTML, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
+    }
+
+    if (url.pathname === "/refresh") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "Method not allowed. Use POST /refresh" }, { status: 405 });
+      }
+      try {
+        const snapshot = await fetchPrices(env.EIA_API_KEY);
+        await storeSnapshot(env.OIL_KV_BINDING, snapshot);
+        return Response.json({ ok: true, message: "Refreshed", snapshot }, {
+          headers: { "Cache-Control": "no-store" },
+        });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
+      }
     }
 
     if (url.pathname === "/valuation/latest") {
@@ -311,7 +648,7 @@ export default {
       });
     }
 
-    if (url.pathname !== "/" && url.pathname !== "/prices/latest") {
+    if (url.pathname !== "/prices/latest") {
       return Response.json({ error: "Not found" }, { status: 404 });
     }
 
