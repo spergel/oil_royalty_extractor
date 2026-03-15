@@ -1,0 +1,31 @@
+[
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "standardized_measure",  "value_thousands": 371366.0,   "source": "table_text"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "future_cash_inflows",   "value_thousands": 643652.0,   "source": "table_text"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "pv10_discount",         "value_thousands": -272286.0,  "source": "table_text"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "prices",   "label": "oil_per_bbl",           "value_thousands": 75.48,      "source": "prose_regex"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "prices",   "label": "gas_per_mcf",           "value_thousands": 2.13,       "source": "prose_regex"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "reserves", "label": "proved_oil_mmbbl",      "value_thousands": 8.368,      "source": "table_text"},
+  {"ticker": "PBT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "reserves", "label": "proved_gas_bcf",        "value_thousands": 23.217,     "source": "table_text"},
+
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "main",     "label": "standardized_measure",  "value_thousands": 301151.0,   "source": "table_text"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "main",     "label": "future_cash_inflows",   "value_thousands": 611199.0,   "source": "table_text"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "main",     "label": "pv10_discount",         "value_thousands": -310048.0,  "source": "table_text"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "prices",   "label": "oil_per_bbl",           "value_thousands": 66.01,      "source": "prose_regex"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "prices",   "label": "gas_per_mcf",           "value_thousands": 3.4,        "source": "prose_regex"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "reserves", "label": "proved_oil_mmbbl",      "value_thousands": 6.631,      "source": "table_text"},
+  {"ticker": "SBR",  "filing_date": "2025-12-31", "report_year": "2025", "section": "reserves", "label": "proved_gas_bcf",        "value_thousands": 60.658,     "source": "table_text"},
+
+  {"ticker": "SJT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "standardized_measure",  "value_thousands": 76890.0,    "source": "table_text"},
+  {"ticker": "SJT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "future_cash_inflows",   "value_thousands": 151456.0,   "source": "table_text"},
+  {"ticker": "SJT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "pv10_discount",         "value_thousands": -54984.0,   "source": "table_text"},
+  {"ticker": "SJT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "prices",   "label": "oil_per_bbl",           "value_thousands": 66.35,      "source": "prose_regex"},
+  {"ticker": "SJT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "prices",   "label": "gas_per_mcf",           "value_thousands": 2.32,       "source": "prose_regex"},
+
+  {"ticker": "VOC",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "standardized_measure",  "value_thousands": 34780.518,  "source": "table_text"},
+  {"ticker": "VOC",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "future_cash_inflows",   "value_thousands": 139048.563, "source": "table_text"},
+  {"ticker": "VOC",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "pv10_discount",         "value_thousands": -11196.048, "source": "table_text"},
+
+  {"ticker": "CRT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "standardized_measure",  "value_thousands": 31330.0,    "source": "table_text"},
+  {"ticker": "CRT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "future_cash_inflows",   "value_thousands": 57357.0,    "source": "table_text"},
+  {"ticker": "CRT",  "filing_date": "2024-12-31", "report_year": "2024", "section": "main",     "label": "pv10_discount",         "value_thousands": -21322.0,   "source": "table_text"}
+]
