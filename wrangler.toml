@@ -11,7 +11,7 @@ crons = ["17 14 1 * *"]
 # paste the returned id below.
 [[kv_namespaces]]
 binding = "OIL_KV_BINDING"
-id     = "REPLACE_WITH_KV_NAMESPACE_ID"
+id     = "6106862e203f48e88680306205fd5664"
 
 # ---- EIA API key — set in Cloudflare dashboard as an environment variable ----
 # Workers & Pages -> oil-price-oracle -> Settings -> Variables and Secrets
