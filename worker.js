@@ -188,10 +188,6 @@ h1{font-size:1.2rem;font-weight:700;white-space:nowrap}
 .price-bar strong{color:var(--tx)}
 /* controls */
 .controls{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:12px 16px;margin-bottom:22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.presets{display:flex;gap:6px}
-.pbtn{padding:5px 13px;border:1px solid var(--bd);border-radius:6px;background:var(--bg3);color:var(--tx);cursor:pointer;font-size:12px;transition:background .12s}
-.pbtn:hover,.pbtn.on{background:var(--ac);border-color:var(--ac);color:#fff}
-.sep{width:1px;height:28px;background:var(--bd)}
 .inputs{display:flex;gap:10px;align-items:flex-end}
 .inputs label{font-size:11px;color:var(--mu);display:flex;flex-direction:column;gap:3px}
 .inputs input{width:88px;padding:5px 8px;background:var(--bg3);border:1px solid var(--bd);border-radius:6px;color:var(--tx);font-size:13px}
@@ -261,12 +257,6 @@ tr{cursor:pointer}
   </header>
 
   <div class="controls">
-    <div class="presets">
-      <button class="pbtn" data-oil="55" data-gas="2.0">Bear $55</button>
-      <button class="pbtn on" data-oil="70" data-gas="2.5">Base $70</button>
-      <button class="pbtn" data-oil="85" data-gas="3.5">Bull $85</button>
-    </div>
-    <div class="sep"></div>
     <div class="inputs">
       <label>WTI $/bbl<input id="oil" type="number" step="0.5" value="70"></label>
       <label>HH $/MMBtu<input id="gas" type="number" step="0.05" value="2.50"></label>
@@ -476,19 +466,6 @@ document.querySelectorAll('th[data-c]').forEach(th=>{
   });
 });
 
-// presets
-document.querySelectorAll('.pbtn').forEach(btn=>{
-  btn.addEventListener('click',()=>{
-    el('oil').value=btn.dataset.oil;
-    el('gas').value=btn.dataset.gas;
-    document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'));
-    btn.classList.add('on');
-    load();
-  });
-});
-['oil','gas'].forEach(id=>el(id).addEventListener('input',()=>
-  document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('on'))
-));
 
 el('run').addEventListener('click',load);
 
