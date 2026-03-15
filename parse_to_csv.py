@@ -172,6 +172,24 @@ def detect_years(lines: List[str]) -> List[int]:
     return []
 
 
+def detect_first_year_header_idx(lines: List[str]) -> int:
+    """
+    Return the index of the first line that appears to be a year header
+    (contains 2+ distinct years), else -1.
+    """
+    for i, line in enumerate(lines):
+        years = YEAR_RE.findall(clean(line))
+        seen: set = set()
+        unique = []
+        for y in years:
+            if y not in seen:
+                seen.add(y)
+                unique.append(y)
+        if len(unique) >= 2:
+            return i
+    return -1
+
+
 # ---------------------------------------------------------------------------
 # Label matching
 # ---------------------------------------------------------------------------
@@ -206,12 +224,10 @@ def match_main_label(nline: str) -> Optional[str]:
         return "future_production_taxes"
     if has_fut and "development cost" in nline and "incurred" not in nline:
         return "future_development_costs"
-    if has_fut and "income tax" in nline:
+    # Keep this narrow to avoid matching prose like:
+    # "...future conditions... no provision for income taxes..."
+    if "future income tax" in nline or "future federal income tax" in nline:
         return "future_income_tax"
-
-    # Undiscounted net cash flows (before discount line)
-    if "future net cash flow" in nline or "future estimated net revenue" in nline:
-        return "future_net_cash_flows"
 
     # PV10 discount line
     if ("10%" in nline or "10 percent" in nline or "annual discount" in nline) and (
@@ -220,6 +236,10 @@ def match_main_label(nline: str) -> Optional[str]:
         return "pv10_discount"
     if "discount of future" in nline or "less 10%" in nline or "less 10 %" in nline:
         return "pv10_discount"
+
+    # Undiscounted net cash flows (before discount line)
+    if ("future net cash flow" in nline or "future estimated net revenue" in nline) and "discount" not in nline:
+        return "future_net_cash_flows"
 
     return None
 
@@ -377,6 +397,7 @@ def parse_file(path: Path) -> List[Row]:
 
     scale = detect_scale(lines)
     years = detect_years(lines)
+    main_start_idx = detect_first_year_header_idx(lines)
     if not years:
         print(f"  [{ticker}/{filing_date}] WARNING: no year header found — skipping", file=sys.stderr)
         return []
@@ -408,19 +429,42 @@ def parse_file(path: Path) -> List[Row]:
             })
 
     in_changes = False
+    changes_start_idx = -1
+    in_changes_table = False
     full_text = text  # for prose price extraction
 
-    for line in lines:
+    for idx, line in enumerate(lines):
         n = norm(line)
 
         # Detect section boundary
         if CHANGES_HEADING_RE.search(n):
             in_changes = True
+            changes_start_idx = idx
+            continue
+
+        # Before the first year header, skip financial row matching entirely.
+        if main_start_idx >= 0 and idx <= main_start_idx and not in_changes:
+            continue
+
+        # In changes section, wait until we reach its year header row.
+        if in_changes and not in_changes_table:
+            if idx <= changes_start_idx:
+                continue
+            # Enter changes table when we encounter a year header line.
+            yrs_here = YEAR_RE.findall(clean(line))
+            uniq = []
+            seen = set()
+            for y in yrs_here:
+                if y not in seen:
+                    seen.add(y)
+                    uniq.append(y)
+            if len(uniq) >= 2:
+                in_changes_table = True
             continue
 
         nums = extract_numbers(line)
 
-        if in_changes:
+        if in_changes and in_changes_table:
             label = match_changes_label(n)
             if label and nums:
                 add("changes", label, nums)
@@ -499,6 +543,63 @@ def build_wide(all_rows: List[Row]) -> List[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# QA checks
+# ---------------------------------------------------------------------------
+
+def run_qa_checks(all_rows: List[Row]) -> List[str]:
+    """
+    Run lightweight QA checks on parsed rows.
+    Returns a list of warning strings.
+    """
+    warnings: List[str] = []
+
+    # Index by filing-year for completeness checks.
+    by_filing_year: Dict[Tuple[str, str, int], List[Row]] = {}
+    for r in all_rows:
+        k = (r["ticker"], r["filing_date"], int(r["report_year"]))
+        by_filing_year.setdefault(k, []).append(r)
+
+    for (ticker, filing_date, year), rows in sorted(by_filing_year.items()):
+        main = {r["label"]: r["value_thousands"] for r in rows if r["section"] == "main"}
+        prices = {r["label"]: r["value_thousands"] for r in rows if r["section"] == "prices"}
+
+        # Core fields
+        if "standardized_measure" not in main:
+            warnings.append(f"{ticker}/{filing_date}/{year}: missing main.standardized_measure")
+        if "future_cash_inflows" not in main:
+            warnings.append(f"{ticker}/{filing_date}/{year}: missing main.future_cash_inflows")
+
+        # Sign sanity checks
+        if "standardized_measure" in main and main["standardized_measure"] < 0:
+            warnings.append(f"{ticker}/{filing_date}/{year}: negative standardized_measure ({main['standardized_measure']})")
+        if "future_cash_inflows" in main and main["future_cash_inflows"] < 0:
+            warnings.append(f"{ticker}/{filing_date}/{year}: negative future_cash_inflows ({main['future_cash_inflows']})")
+        if "pv10_discount" in main and main["pv10_discount"] > 0:
+            warnings.append(f"{ticker}/{filing_date}/{year}: positive pv10_discount ({main['pv10_discount']})")
+
+        # Price plausibility (SEC average annual prices should be in broad realistic ranges)
+        oil = prices.get("oil_per_bbl")
+        gas = prices.get("gas_per_mcf")
+        ngl = prices.get("ngl_per_bbl")
+        if oil is not None and not (15 <= oil <= 200):
+            warnings.append(f"{ticker}/{filing_date}/{year}: oil_per_bbl out of range ({oil})")
+        if gas is not None and not (0.25 <= gas <= 25):
+            warnings.append(f"{ticker}/{filing_date}/{year}: gas_per_mcf out of range ({gas})")
+        if ngl is not None and not (5 <= ngl <= 150):
+            warnings.append(f"{ticker}/{filing_date}/{year}: ngl_per_bbl out of range ({ngl})")
+
+        # Common prose-parsing failure signature: tiny positive "future_income_tax"
+        # that looks like a commodity price token rather than a tax-flow line.
+        fit = main.get("future_income_tax")
+        if fit is not None and 0 < fit < 200:
+            warnings.append(
+                f"{ticker}/{filing_date}/{year}: suspiciously small future_income_tax ({fit}) - verify row mapping"
+            )
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -506,6 +607,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Parse standardized measure .txt files to CSV")
     ap.add_argument("--output-dir", default=str(OUTPUT_DIR), help="Root output directory")
     ap.add_argument("--verbose", "-v", action="store_true")
+    ap.add_argument("--qa", action="store_true", help="Run QA checks and print warnings summary")
     args = ap.parse_args()
 
     out_root = Path(args.output_dir)
@@ -547,6 +649,15 @@ def main() -> None:
             w.writeheader()
             w.writerows(wide_rows)
         print(f"Wide CSV  -> {wide_path}  ({len(wide_rows)} rows)")
+
+    if args.qa:
+        qa_warnings = run_qa_checks(all_rows)
+        print("\nQA summary")
+        print(f"  warnings: {len(qa_warnings)}")
+        for w in qa_warnings[:100]:
+            print(f"  - {w}")
+        if len(qa_warnings) > 100:
+            print(f"  ... {len(qa_warnings) - 100} more warnings")
 
 
 if __name__ == "__main__":
